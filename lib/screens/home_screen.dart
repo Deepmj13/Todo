@@ -12,6 +12,7 @@ import '../widgets/section_header.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/stats_banner.dart';
 import '../widgets/search_bar.dart' as custom;
+import '../widgets/skeleton_loading.dart';
 import 'add_todo_sheet.dart';
 
 enum SortOption { dueDate, priority, alphabetical }
@@ -64,7 +65,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     data: (todos) =>
                         _buildContent(todos, colorScheme, textTheme),
                     loading: () =>
-                        const Center(child: CircularProgressIndicator()),
+                        const SkeletonLoading(itemCount: 4, itemHeight: 80),
                     error: (error, stack) =>
                         _buildErrorState(colorScheme, textTheme),
                   ),
