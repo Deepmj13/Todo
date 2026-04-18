@@ -1,97 +1,20 @@
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 
 import '../models/todo.dart';
 import '../providers/todo_provider.dart';
-import '../widgets/todo_list_item.dart';
+import '../providers/stats_provider.dart';
+import '../providers/settings_provider.dart';
+import '../theme/app_theme.dart';
+import '../widgets/todo_card.dart';
+import '../widgets/section_header.dart';
 import '../widgets/empty_state.dart';
-import 'add_edit_todo_screen.dart';
+import '../widgets/stats_banner.dart';
+import '../widgets/search_bar.dart' as custom;
+import 'add_todo_sheet.dart';
 
-class FilterParams {
-  final String searchQuery;
-  final int selectedFilter;
-  final String? selectedCategory;
-  final int selectedSort;
-
-  const FilterParams({
-    required this.searchQuery,
-    required this.selectedFilter,
-    this.selectedCategory,
-    required this.selectedSort,
-  });
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is FilterParams &&
-          searchQuery == other.searchQuery &&
-          selectedFilter == other.selectedFilter &&
-          selectedCategory == other.selectedCategory &&
-          selectedSort == other.selectedSort;
-
-  @override
-  int get hashCode =>
-      Object.hash(searchQuery, selectedFilter, selectedCategory, selectedSort);
-}
-
-final filteredTodosProvider = Provider.family<List<Todo>, FilterParams>((
-  ref,
-  params,
-) {
-  final todosAsync = ref.watch(todoListProvider);
-  return todosAsync.maybeWhen(
-    data: (todos) => _filterAndSortTodosStatic(
-      todos,
-      params.searchQuery,
-      params.selectedFilter,
-      params.selectedCategory,
-      params.selectedSort,
-    ),
-    orElse: () => [],
-  );
-});
-
-List<Todo> _filterAndSortTodosStatic(
-  List<Todo> todos,
-  String searchQuery,
-  int selectedFilter,
-  String? selectedCategory,
-  int selectedSort,
-) {
-  final searchLower = searchQuery.toLowerCase();
-  var filtered = todos.where((todo) {
-    final matchesSearch =
-        searchQuery.isEmpty ||
-        todo.title.toLowerCase().contains(searchLower) ||
-        (todo.description?.toLowerCase().contains(searchLower) ?? false);
-
-    final matchesFilter =
-        selectedFilter == 0 ||
-        (selectedFilter == 1 && !todo.isCompleted) ||
-        (selectedFilter == 2 && todo.isCompleted);
-
-    final matchesCategory =
-        selectedCategory == null || todo.category == selectedCategory;
-
-    return matchesSearch && matchesFilter && matchesCategory;
-  }).toList();
-
-  switch (selectedSort) {
-    case 0:
-      filtered.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      break;
-    case 1:
-      filtered.sort((a, b) => b.priority.compareTo(a.priority));
-      break;
-    case 2:
-      filtered.sort(
-        (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()),
-      );
-      break;
-  }
-
-  return filtered;
-}
+enum SortOption { dueDate, priority, alphabetical }
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -101,235 +24,468 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
+  final ScrollController _scrollController = ScrollController();
+  bool _isSearching = false;
   String _searchQuery = '';
-  int _selectedFilter = 0; // 0: All, 1: Active, 2: Completed
-  String? _selectedCategory;
-  int _selectedSort = 0; // 0: Date, 1: Priority, 2: Name
+  int? _lastPointsPopup;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(todoListProvider.notifier).checkMissedTasks();
+      ref.read(userStatsProvider.notifier).checkAndResetStreak();
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
     final todosAsync = ref.watch(todoListProvider);
-    final categories = ref.watch(categoriesProvider);
-    final filterParams = FilterParams(
-      searchQuery: _searchQuery,
-      selectedFilter: _selectedFilter,
-      selectedCategory: _selectedCategory,
-      selectedSort: _selectedSort,
-    );
-    final filteredTodos = ref.watch(filteredTodosProvider(filterParams));
 
-    return CupertinoPageScaffold(
-      navigationBar: CupertinoNavigationBar(
-        middle: const Text('Todo App'),
-        trailing: CupertinoButton(
-          padding: EdgeInsets.zero,
-          child: const Icon(CupertinoIcons.add),
-          onPressed: () {
-            Navigator.push(
-              context,
-              CupertinoPageRoute(
-                builder: (context) => const AddEditTodoScreen(),
-              ),
-            );
-          },
-        ),
-      ),
-      child: SafeArea(
+    return Scaffold(
+      backgroundColor: colorScheme.surface,
+      body: SafeArea(
         child: Column(
           children: [
-            _buildSearchBar(),
-            _buildFilterChips(categories),
+            _buildHeader(colorScheme, textTheme),
+            if (_isSearching) _buildSearchBar(colorScheme, textTheme),
             Expanded(
-              child: todosAsync.when(
-                data: (todos) {
-                  if (filteredTodos.isEmpty) {
-                    if (todos.isEmpty) {
-                      return const EmptyState();
-                    }
-                    return const EmptyState(
-                      title: 'No matching todos',
-                      subtitle: 'Try adjusting your search or filters',
-                      icon: CupertinoIcons.search,
-                    );
-                  }
-                  return ListView.builder(
-                    itemCount: filteredTodos.length,
-                    itemBuilder: (context, index) {
-                      final todo = filteredTodos[index];
-                      return TodoListItem(
-                        todo: todo,
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            CupertinoPageRoute(
-                              builder: (context) =>
-                                  AddEditTodoScreen(todo: todo),
-                            ),
-                          );
-                        },
-                        onToggle: () {
-                          ref
-                              .read(todoListProvider.notifier)
-                              .toggleComplete(todo.id);
-                        },
-                        onDelete: () {
-                          _showDeleteConfirmation(context, todo.id);
-                        },
-                      );
-                    },
-                  );
-                },
-                loading: () =>
-                    const Center(child: CupertinoActivityIndicator()),
-                error: (error, stack) => Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text('Error: $error'),
-                      const SizedBox(height: 16),
-                      CupertinoButton(
-                        child: const Text('Retry'),
-                        onPressed: () {
-                          ref.read(todoListProvider.notifier).loadTodos();
-                        },
-                      ),
-                    ],
+              child: Stack(
+                children: [
+                  todosAsync.when(
+                    data: (todos) =>
+                        _buildContent(todos, colorScheme, textTheme),
+                    loading: () =>
+                        const Center(child: CircularProgressIndicator()),
+                    error: (error, stack) =>
+                        _buildErrorState(colorScheme, textTheme),
                   ),
-                ),
+                  if (_lastPointsPopup != null && _lastPointsPopup! > 0)
+                    Positioned(
+                      top: Spacing.md,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: PointsPopup(
+                          points: _lastPointsPopup!,
+                          isGain: true,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
           ],
         ),
       ),
+      floatingActionButton: _buildFAB(colorScheme),
     );
   }
 
-  Widget _buildSearchBar() {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: CupertinoSearchTextField(
-        placeholder: 'Search todos...',
-        onChanged: (value) {
-          setState(() {
-            _searchQuery = value;
-          });
-        },
+  Widget _buildHeader(ColorScheme colorScheme, TextTheme textTheme) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(
+        Spacing.md,
+        Spacing.md,
+        Spacing.md,
+        Spacing.sm,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _getGreeting(),
+                      style: textTheme.bodyMedium?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text('Tasks', style: textTheme.displayLarge),
+                  ],
+                ),
+              ),
+              FilterChip(
+                label: const Text('Done'),
+                selected: ref.watch(settingsProvider).showCompleted,
+                onSelected: (selected) {
+                  ref.read(settingsProvider.notifier).setShowCompleted(selected);
+                },
+                showCheckmark: false,
+              ),
+              const SizedBox(width: Spacing.xs),
+              IconButton(
+                onPressed: () {
+                  setState(() {
+                    _isSearching = !_isSearching;
+                    if (!_isSearching) _searchQuery = '';
+                  });
+                },
+                icon: Icon(
+                  _isSearching ? Icons.close : Icons.search,
+                  color: colorScheme.onSurface,
+                ),
+              ),
+              PopupMenuButton<SortOption>(
+                icon: Icon(Icons.more_vert, color: colorScheme.onSurface),
+                onSelected: (option) {
+                  ref.read(settingsProvider.notifier).setSortOption(option);
+                },
+                itemBuilder: (context) {
+                  final settings = ref.watch(settingsProvider);
+                  return [
+                    _buildSortMenuItem(SortOption.dueDate, 'Due Date', settings.sortOption),
+                    _buildSortMenuItem(SortOption.priority, 'Priority', settings.sortOption),
+                    _buildSortMenuItem(SortOption.alphabetical, 'Alphabetical', settings.sortOption),
+                  ];
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: Spacing.sm),
+          const StatsBanner(),
+        ],
+      ),
+    ).animate().fadeIn(duration: 300.ms);
+  }
+
+  String _getGreeting() {
+    final hour = DateTime.now().hour;
+    if (hour < 12) return 'Good morning';
+    if (hour < 17) return 'Good afternoon';
+    return 'Good evening';
+  }
+
+  PopupMenuItem<SortOption> _buildSortMenuItem(
+    SortOption option,
+    String label,
+    SortOption currentSort,
+  ) {
+    final isSelected = currentSort == option;
+    return PopupMenuItem(
+      value: option,
+      child: Row(
+        children: [
+          if (isSelected)
+            Icon(
+              Icons.check,
+              size: 18,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          if (isSelected) const SizedBox(width: Spacing.sm),
+          Text(label),
+        ],
       ),
     );
   }
 
-  Widget _buildFilterChips(List<String> categories) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+  Widget _buildSearchBar(ColorScheme colorScheme, TextTheme textTheme) {
+    return custom.SearchBar(
+      query: _searchQuery,
+      onChanged: (value) {
+        setState(() {
+          _searchQuery = value.toLowerCase();
+        });
+      },
+      onClear: () {
+        setState(() {
+          _searchQuery = '';
+        });
+      },
+    );
+  }
+
+  Widget _buildContent(
+    List<Todo> todos,
+    ColorScheme colorScheme,
+    TextTheme textTheme,
+  ) {
+    final filteredTodos = _filterAndSortTodos(todos);
+
+    if (todos.isEmpty) {
+      return MinimalEmptyState(onAction: () => showAddTodoSheet(context));
+    }
+
+    if (filteredTodos.isEmpty && _searchQuery.isNotEmpty) {
+      return EmptySearchState(
+        query: _searchQuery,
+        onClear: () {
+          setState(() {
+            _searchQuery = '';
+          });
+        },
+      );
+    }
+
+    final groupedTodos = _groupTodosByDate(filteredTodos);
+
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.only(bottom: 100),
+      itemCount: groupedTodos.length,
+      itemBuilder: (context, index) {
+        final entry = groupedTodos.entries.elementAt(index);
+        return _buildSection(
+          entry.key,
+          entry.value,
+          colorScheme,
+          textTheme,
+          index,
+        );
+      },
+    );
+  }
+
+  List<Todo> _filterAndSortTodos(List<Todo> todos) {
+    final settings = ref.watch(settingsProvider);
+    var filtered = todos.where((todo) {
+      if (_searchQuery.isEmpty) return true;
+      return todo.title.toLowerCase().contains(_searchQuery) ||
+          (todo.description?.toLowerCase().contains(_searchQuery) ?? false) ||
+          (todo.category?.toLowerCase().contains(_searchQuery) ?? false);
+    }).toList();
+
+    if (!settings.showCompleted) {
+      filtered = filtered.where((t) => !t.isCompleted).toList();
+    }
+
+    switch (settings.sortOption) {
+      case SortOption.dueDate:
+        filtered.sort((a, b) {
+          if (a.dueDate == null && b.dueDate == null) {
+            return a.createdAt.compareTo(b.createdAt);
+          }
+          if (a.dueDate == null) return 1;
+          if (b.dueDate == null) return -1;
+          return a.dueDate!.compareTo(b.dueDate!);
+        });
+        break;
+      case SortOption.priority:
+        filtered.sort((a, b) => b.priority.compareTo(a.priority));
+        break;
+      case SortOption.alphabetical:
+        filtered.sort(
+          (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()),
+        );
+        break;
+    }
+
+    return filtered;
+  }
+
+  Map<String, List<Todo>> _groupTodosByDate(List<Todo> todos) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final tomorrow = today.add(const Duration(days: 1));
+    final nextWeek = today.add(const Duration(days: 7));
+
+    final Map<String, List<Todo>> grouped = {
+      'Overdue': [],
+      'Today': [],
+      'Tomorrow': [],
+      'This Week': [],
+      'Later': [],
+      'No Date': [],
+    };
+
+    for (final todo in todos) {
+      if (todo.dueDate == null) {
+        grouped['No Date']!.add(todo);
+        continue;
+      }
+
+      final dueDate = DateTime(
+        todo.dueDate!.year,
+        todo.dueDate!.month,
+        todo.dueDate!.day,
+      );
+
+      if (dueDate.isBefore(today)) {
+        grouped['Overdue']!.add(todo);
+      } else if (dueDate.isAtSameMomentAs(today)) {
+        grouped['Today']!.add(todo);
+      } else if (dueDate.isAtSameMomentAs(tomorrow)) {
+        grouped['Tomorrow']!.add(todo);
+      } else if (dueDate.isBefore(nextWeek)) {
+        grouped['This Week']!.add(todo);
+      } else {
+        grouped['Later']!.add(todo);
+      }
+    }
+
+    grouped.removeWhere((key, value) => value.isEmpty);
+    return grouped;
+  }
+
+  Widget _buildSection(
+    String title,
+    List<Todo> todos,
+    ColorScheme colorScheme,
+    TextTheme textTheme,
+    int sectionIndex,
+  ) {
+    Color sectionColor;
+    switch (title) {
+      case 'Overdue':
+        sectionColor = AppColors.systemRed;
+        break;
+      case 'Today':
+        sectionColor = AppColors.systemBlue;
+        break;
+      case 'Tomorrow':
+        sectionColor = AppColors.systemOrange;
+        break;
+      default:
+        sectionColor = colorScheme.onSurfaceVariant;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(
+          title: title,
+          count: todos.length,
+          trailing: Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: sectionColor,
+              shape: BoxShape.circle,
+            ),
+          ),
+        ),
+        ...todos.asMap().entries.map((entry) {
+          final index = entry.key;
+          final todo = entry.value;
+          return TodoCard(
+            todo: todo,
+            index: sectionIndex * 10 + index,
+            onTap: () => showAddTodoSheet(context, todo: todo),
+            onToggle: () async {
+              final pointsEarned = await ref
+                  .read(todoListProvider.notifier)
+                  .toggleComplete(todo.id);
+
+              if (pointsEarned > 0 && mounted) {
+                setState(() {
+                  _lastPointsPopup = pointsEarned;
+                });
+                Future.delayed(const Duration(milliseconds: 2000), () {
+                  if (mounted) {
+                    setState(() {
+                      _lastPointsPopup = null;
+                    });
+                  }
+                });
+              }
+            },
+            onDelete: () {
+              ref.read(todoListProvider.notifier).deleteTodo(todo.id);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('${todo.title} deleted'),
+                  action: SnackBarAction(
+                    label: 'Undo',
+                    onPressed: () {
+                      ref
+                          .read(todoListProvider.notifier)
+                          .addTodo(
+                            title: todo.title,
+                            description: todo.description,
+                            priority: todo.priority,
+                            category: todo.category,
+                            dueDate: todo.dueDate,
+                            timeMinutes: todo.timeMinutes,
+                          );
+                    },
+                  ),
+                ),
+              );
+            },
+          );
+        }),
+      ],
+    );
+  }
+
+  Widget _buildErrorState(ColorScheme colorScheme, TextTheme textTheme) {
+    return Center(
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
+          Icon(Icons.error_outline, size: 64, color: colorScheme.error),
+          const SizedBox(height: Spacing.md),
+          Text('Something went wrong', style: textTheme.headlineLarge),
+          const SizedBox(height: Spacing.sm),
+          Text(
+            'Unable to load tasks',
+            style: textTheme.bodyMedium?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: Spacing.lg),
+          ElevatedButton(
+            onPressed: () {
+              ref.read(todoListProvider.notifier).loadTodos();
+            },
+            child: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFAB(ColorScheme colorScheme) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.systemBlue,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.systemBlue.withValues(alpha: 0.3),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => showAddTodoSheet(context),
+          borderRadius: BorderRadius.circular(16),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 14),
             child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                _buildFilterChip('All', 0),
-                const SizedBox(width: 8),
-                _buildFilterChip('Active', 1),
-                const SizedBox(width: 8),
-                _buildFilterChip('Completed', 2),
-                const SizedBox(width: 8),
-                ...categories.map(
-                  (cat) => Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: _buildFilterChip(
-                      cat,
-                      _getCategoryIndex(cat, categories),
-                      isCategory: true,
-                    ),
+                Icon(Icons.add, color: Colors.white),
+                SizedBox(width: Spacing.sm),
+                Text(
+                  'New Task',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              const Text('Sort: '),
-              CupertinoSlidingSegmentedControl<int>(
-                groupValue: _selectedSort,
-                children: const {
-                  0: Text('Date'),
-                  1: Text('Priority'),
-                  2: Text('Name'),
-                },
-                onValueChanged: (value) {
-                  setState(() {
-                    _selectedSort = value ?? 0;
-                  });
-                },
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFilterChip(String label, int index, {bool isCategory = false}) {
-    final isSelected = isCategory
-        ? _selectedCategory == label
-        : _selectedFilter == index;
-
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          if (isCategory) {
-            _selectedCategory = isSelected ? null : label;
-          } else {
-            _selectedFilter = index;
-            _selectedCategory = null;
-          }
-        });
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? CupertinoColors.activeBlue
-              : CupertinoColors.systemGrey5,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: isSelected ? CupertinoColors.white : CupertinoColors.label,
-          ),
         ),
       ),
-    );
-  }
-
-  int _getCategoryIndex(String category, List<String> categories) {
-    return 3 + categories.indexOf(category);
-  }
-
-  void _showDeleteConfirmation(BuildContext context, String todoId) {
-    showCupertinoDialog(
-      context: context,
-      builder: (context) => CupertinoAlertDialog(
-        title: const Text('Delete Todo'),
-        content: const Text('Are you sure you want to delete this todo?'),
-        actions: [
-          CupertinoDialogAction(
-            child: const Text('Cancel'),
-            onPressed: () => Navigator.pop(context),
-          ),
-          CupertinoDialogAction(
-            isDestructiveAction: true,
-            onPressed: () {
-              ref.read(todoListProvider.notifier).deleteTodo(todoId);
-              Navigator.pop(context);
-            },
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
+    ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.5, end: 0);
   }
 }

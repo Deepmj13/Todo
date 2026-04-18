@@ -25,13 +25,20 @@ class TodoAdapter extends TypeAdapter<Todo> {
       category: fields[5] as String?,
       dueDate: fields[6] as DateTime?,
       createdAt: fields[7] as DateTime,
+      timeMinutes: fields[8] as int?,
+      recurrenceType: fields[9] as RecurrenceType?,
+      recurrenceDays: (fields[10] as List?)?.cast<int>(),
+      recurrenceTimesPerWeek: fields[11] as int?,
+      parentId: fields[12] as String?,
+      isRecurringInstance: fields[13] as bool,
+      originalDueDate: fields[14] as DateTime?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Todo obj) {
     writer
-      ..writeByte(8)
+      ..writeByte(15)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -47,7 +54,21 @@ class TodoAdapter extends TypeAdapter<Todo> {
       ..writeByte(6)
       ..write(obj.dueDate)
       ..writeByte(7)
-      ..write(obj.createdAt);
+      ..write(obj.createdAt)
+      ..writeByte(8)
+      ..write(obj.timeMinutes)
+      ..writeByte(9)
+      ..write(obj.recurrenceType)
+      ..writeByte(10)
+      ..write(obj.recurrenceDays)
+      ..writeByte(11)
+      ..write(obj.recurrenceTimesPerWeek)
+      ..writeByte(12)
+      ..write(obj.parentId)
+      ..writeByte(13)
+      ..write(obj.isRecurringInstance)
+      ..writeByte(14)
+      ..write(obj.originalDueDate);
   }
 
   @override
